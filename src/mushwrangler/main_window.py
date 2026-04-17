@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtGui import QAction, QCloseEvent
 from PySide6.QtWidgets import QMainWindow, QMdiArea, QMdiSubWindow, QStatusBar, QToolBar
 
@@ -38,6 +38,11 @@ class MUSHWranglerWindow(QMainWindow):
         self._settings_widget: SettingsManager | None = None
         self._settings_subwindow: QMdiSubWindow | None = None
         self._shutting_down = False
+
+        self._geometry_timer = QTimer(self)
+        self._geometry_timer.setInterval(1000)
+        self._geometry_timer.timeout.connect(self._persist_all_session_geometries)
+        self._geometry_timer.start()
 
         self.setObjectName("mainwindow")
         self.setWindowTitle("MUSHWrangler")
@@ -146,18 +151,18 @@ class MUSHWranglerWindow(QMainWindow):
         sub.setWindowTitle(f"{world.name} - {character.name}")
         self.mdi_area.addSubWindow(sub)
         area = self.mdi_area.viewport().rect()
-        if character.window is None:
+        restore_state = character.window
+        if restore_state is None:
             width = max(int(area.width() * 0.58), 760)
             height = max(int(area.height() * 0.62), 460)
             sub.resize(width, height)
-        else:
-            sub.setGeometry(
-                character.window.x,
-                character.window.y,
-                max(character.window.width, 300),
-                max(character.window.height, 220),
-            )
         sub.show()
+
+        if restore_state is not None:
+            QTimer.singleShot(
+                0,
+                lambda w=sub, s=restore_state: self._restore_session_geometry(w, s),
+            )
 
         action = QAction(character.name, self)
         action.setCheckable(True)
@@ -231,6 +236,8 @@ class MUSHWranglerWindow(QMainWindow):
     def _on_subwindow_activated(self, active: QMdiSubWindow | None) -> None:
         for window, action in list(self._session_actions.items()):
             action.setChecked(window is active)
+        if not self._shutting_down:
+            self._persist_all_session_geometries()
 
     def _close_active_subwindow(self) -> None:
         active = self.mdi_area.activeSubWindow()
@@ -250,6 +257,20 @@ class MUSHWranglerWindow(QMainWindow):
             geo = window.geometry()
         except RuntimeError:
             return
+
+        if geo.width() <= 0 or geo.height() <= 0:
+            return
+
+        current = character.window
+        if (
+            current is not None
+            and current.x == geo.x()
+            and current.y == geo.y()
+            and current.width == geo.width()
+            and current.height == geo.height()
+        ):
+            return
+
         character.window = WindowState(
             x=geo.x(),
             y=geo.y(),
@@ -264,6 +285,7 @@ class MUSHWranglerWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self._shutting_down = True
+        self._geometry_timer.stop()
         self._persist_all_session_geometries()
         super().closeEvent(event)
 
@@ -274,6 +296,17 @@ class MUSHWranglerWindow(QMainWindow):
             character = self.settings.characters.get(character_id)
             return character is not None and character.window is not None
         return False
+
+    def _restore_session_geometry(self, window: QMdiSubWindow, state: WindowState) -> None:
+        if window not in self.mdi_area.subWindowList():
+            return
+        window.setGeometry(
+            state.x,
+            state.y,
+            max(state.width, 300),
+            max(state.height, 220),
+        )
+        self._ensure_window_on_canvas(window)
 
     def _refresh_in_use_characters(self) -> None:
         if self._settings_widget is None:
