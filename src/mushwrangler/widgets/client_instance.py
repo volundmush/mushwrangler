@@ -170,18 +170,29 @@ class MUClientInstance(QSplitter):
         menu.exec(widget.mapToGlobal(pos))
 
     def _toggle_split_input(self) -> None:
-        self._set_split_input_enabled(not self.character.split_input, persist=True)
+        self._set_split_input_enabled(
+            not self.character.split_input,
+            persist=True,
+            set_focus=True,
+        )
 
-    def _set_split_input_enabled(self, enabled: bool, persist: bool = False) -> None:
+    def _set_split_input_enabled(
+        self,
+        enabled: bool,
+        persist: bool = False,
+        set_focus: bool = False,
+    ) -> None:
         self.character.split_input = enabled
         if enabled:
             self.input2.show()
             self.input_split.setSizes([500, 500])
-            self.input2.setFocus()
+            if set_focus:
+                self.input2.setFocus()
         else:
             self.input2.hide()
             self.input_split.setSizes([1000, 0])
-            self.input.setFocus()
+            if set_focus:
+                self.input.setFocus()
 
         if persist:
             save_character(self.character)
