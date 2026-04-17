@@ -7,7 +7,7 @@ from PySide6.QtGui import QAction, QCloseEvent
 from PySide6.QtWidgets import QMainWindow, QMdiArea, QMdiSubWindow, QStatusBar, QToolBar
 
 from mushwrangler.models import Character, WindowState
-from mushwrangler.settings import SettingsData, save_character
+from mushwrangler.settings import SettingsData, save_character, save_global_settings
 from mushwrangler.widgets.client_instance import MUClientInstance
 from mushwrangler.widgets.settings_manager import SettingsManager
 
@@ -44,9 +44,14 @@ class MUSHWranglerWindow(QMainWindow):
         self._geometry_timer.timeout.connect(self._persist_all_session_geometries)
         self._geometry_timer.start()
 
+        self._window_state_timer = QTimer(self)
+        self._window_state_timer.setInterval(1000)
+        self._window_state_timer.timeout.connect(self._save_main_window_state)
+        self._window_state_timer.start()
+
         self.setObjectName("mainwindow")
         self.setWindowTitle("MUSHWrangler")
-        self.resize(1280, 800)
+        self._apply_main_window_state()
 
         self.mdi_area = QMdiArea(self)
         self.mdi_area.setViewMode(QMdiArea.ViewMode.SubWindowView)
@@ -286,8 +291,37 @@ class MUSHWranglerWindow(QMainWindow):
     def closeEvent(self, event: QCloseEvent) -> None:
         self._shutting_down = True
         self._geometry_timer.stop()
+        self._window_state_timer.stop()
         self._persist_all_session_geometries()
+        self._save_main_window_state()
         super().closeEvent(event)
+
+    def _apply_main_window_state(self) -> None:
+        st = self.settings.global_settings.main_window
+        self.setGeometry(st.x, st.y, max(st.width, 640), max(st.height, 420))
+        if st.window_state == "maximized":
+            self.showMaximized()
+        elif st.window_state == "minimized":
+            self.showMinimized()
+        else:
+            self.showNormal()
+
+    def _save_main_window_state(self) -> None:
+        st = self.settings.global_settings.main_window
+        geom = self.normalGeometry() if self.isMaximized() or self.isMinimized() else self.geometry()
+        st.x = geom.x()
+        st.y = geom.y()
+        st.width = geom.width()
+        st.height = geom.height()
+
+        if self.isMaximized():
+            st.window_state = "maximized"
+        elif self.isMinimized():
+            st.window_state = "minimized"
+        else:
+            st.window_state = "normal"
+
+        save_global_settings(self.settings.global_settings)
 
     def _has_saved_window_state(self, window: QMdiSubWindow) -> bool:
         for character_id, session_window in self._session_windows_by_character.items():

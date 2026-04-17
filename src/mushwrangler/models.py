@@ -56,10 +56,21 @@ class TimerEntry(BaseModel):
     enabled: bool = True
 
 
+class MainWindowState(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    x: int = 80
+    y: int = 80
+    width: int = 1280
+    height: int = 800
+    window_state: str = "normal"
+
+
 class GlobalSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     display: DisplaySettings = Field(default_factory=DisplaySettings)
+    main_window: MainWindowState = Field(default_factory=MainWindowState)
 
 
 class WindowState(BaseModel):
