@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QObject, Signal
-from PySide6.QtNetwork import QAbstractSocket, QSslSocket, QTcpSocket
+from PySide6.QtNetwork import QAbstractSocket, QNetworkProxy, QSslSocket, QTcpSocket
 
 from mushwrangler.models import Character, World
 from mushwrangler.telnet import TelnetData, parse_telnet
@@ -34,6 +34,8 @@ class ClientConnection(QObject):
             socket = QTcpSocket(self)
             socket.connected.connect(self.connected)
 
+        socket.setProxy(self._build_proxy())
+
         socket.readyRead.connect(self._on_ready_read)
         socket.disconnected.connect(self._on_disconnected)
         socket.errorOccurred.connect(self._on_error)
@@ -44,6 +46,26 @@ class ClientConnection(QObject):
             socket.connectToHostEncrypted(host.address, host.port)
         else:
             socket.connectToHost(host.address, host.port)
+
+    def _build_proxy(self) -> QNetworkProxy:
+        proxy_settings = self._world.proxy
+        proxy_type_name = proxy_settings.type
+        proxy_type = {
+            "NoProxy": QNetworkProxy.ProxyType.NoProxy,
+            "DefaultProxy": QNetworkProxy.ProxyType.DefaultProxy,
+            "Socks5Proxy": QNetworkProxy.ProxyType.Socks5Proxy,
+            "HttpProxy": QNetworkProxy.ProxyType.HttpProxy,
+            "HttpCachingProxy": QNetworkProxy.ProxyType.HttpCachingProxy,
+            "FtpCachingProxy": QNetworkProxy.ProxyType.FtpCachingProxy,
+        }.get(proxy_type_name, QNetworkProxy.ProxyType.NoProxy)
+
+        return QNetworkProxy(
+            proxy_type,
+            proxy_settings.host_name,
+            proxy_settings.port,
+            proxy_settings.user,
+            proxy_settings.password,
+        )
 
     def is_connected(self) -> bool:
         if self._socket is None:

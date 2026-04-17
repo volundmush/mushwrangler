@@ -30,6 +30,7 @@ from mushwrangler.models import (
     FontSpec,
     GlobalSettings,
     Host,
+    ProxySettings,
     TimerEntry,
     World,
 )
@@ -43,6 +44,14 @@ from mushwrangler.settings import (
 )
 
 CHARSETS = ["ascii", "latin-1", "utf-8", "utf-16", "cp1252"]
+PROXY_TYPES = [
+    "NoProxy",
+    "DefaultProxy",
+    "Socks5Proxy",
+    "HttpProxy",
+    "HttpCachingProxy",
+    "FtpCachingProxy",
+]
 
 
 def _resolve_display(
@@ -419,16 +428,34 @@ class WorldConnectEditor(QWidget):
         self.port_spin.setRange(1, 65535)
         self.tls_combo = QComboBox(self)
         self.tls_combo.addItems(["False", "True"])
+        self.proxy_type_combo = QComboBox(self)
+        self.proxy_type_combo.addItems(PROXY_TYPES)
+        self.proxy_host_edit = QLineEdit(self)
+        self.proxy_port_spin = QSpinBox(self)
+        self.proxy_port_spin.setRange(0, 65535)
+        self.proxy_user_edit = QLineEdit(self)
+        self.proxy_password_edit = QLineEdit(self)
+        self.proxy_password_edit.setEchoMode(QLineEdit.EchoMode.Password)
 
         layout.addRow("Name", self.name_edit)
         layout.addRow("Host", self.host_edit)
         layout.addRow("Port", self.port_spin)
         layout.addRow("TLS", self.tls_combo)
+        layout.addRow("Proxy Type", self.proxy_type_combo)
+        layout.addRow("Proxy Host", self.proxy_host_edit)
+        layout.addRow("Proxy Port", self.proxy_port_spin)
+        layout.addRow("Proxy User", self.proxy_user_edit)
+        layout.addRow("Proxy Password", self.proxy_password_edit)
 
         self.name_edit.editingFinished.connect(self._apply)
         self.host_edit.editingFinished.connect(self._apply)
         self.port_spin.valueChanged.connect(lambda _v: self._apply())
         self.tls_combo.currentIndexChanged.connect(lambda _i: self._apply())
+        self.proxy_type_combo.currentIndexChanged.connect(lambda _i: self._apply())
+        self.proxy_host_edit.editingFinished.connect(self._apply)
+        self.proxy_port_spin.valueChanged.connect(lambda _v: self._apply())
+        self.proxy_user_edit.editingFinished.connect(self._apply)
+        self.proxy_password_edit.editingFinished.connect(self._apply)
 
     def set_world(self, world: World | None) -> None:
         self._world = world
@@ -438,12 +465,27 @@ class WorldConnectEditor(QWidget):
             self.host_edit.clear()
             self.port_spin.setValue(1)
             self.tls_combo.setCurrentIndex(0)
+            self.proxy_type_combo.setCurrentIndex(0)
+            self.proxy_host_edit.clear()
+            self.proxy_port_spin.setValue(0)
+            self.proxy_user_edit.clear()
+            self.proxy_password_edit.clear()
             return
         self.setEnabled(True)
         self.name_edit.setText(world.name)
         self.host_edit.setText(world.host.address)
         self.port_spin.setValue(world.host.port or 1)
         self.tls_combo.setCurrentIndex(1 if world.host.tls else 0)
+        proxy_type = world.proxy.type
+        idx = self.proxy_type_combo.findText(proxy_type)
+        if idx < 0:
+            self.proxy_type_combo.addItem(proxy_type)
+            idx = self.proxy_type_combo.findText(proxy_type)
+        self.proxy_type_combo.setCurrentIndex(max(idx, 0))
+        self.proxy_host_edit.setText(world.proxy.host_name)
+        self.proxy_port_spin.setValue(world.proxy.port)
+        self.proxy_user_edit.setText(world.proxy.user)
+        self.proxy_password_edit.setText(world.proxy.password)
 
     def _apply(self) -> None:
         if self._world is None:
@@ -453,6 +495,13 @@ class WorldConnectEditor(QWidget):
             address=self.host_edit.text().strip(),
             port=self.port_spin.value(),
             tls=self.tls_combo.currentIndex() == 1,
+        )
+        self._world.proxy = ProxySettings(
+            type=self.proxy_type_combo.currentText(),
+            host_name=self.proxy_host_edit.text().strip(),
+            port=self.proxy_port_spin.value(),
+            user=self.proxy_user_edit.text(),
+            password=self.proxy_password_edit.text(),
         )
         save_world(self._world)
         self.changed.emit()

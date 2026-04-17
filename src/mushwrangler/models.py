@@ -22,6 +22,16 @@ class Host(BaseModel):
     tls: bool = False
 
 
+class ProxySettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: str = "NoProxy"
+    host_name: str = ""
+    port: int = 0
+    user: str = ""
+    password: str = ""
+
+
 class FontSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -88,6 +98,7 @@ class World(BaseModel):
     id: UUID = Field(default_factory=uuid4)
     name: str = ""
     host: Host = Field(default_factory=Host)
+    proxy: ProxySettings = Field(default_factory=ProxySettings)
     proxy_id: Optional[UUID] = None
     display: DisplayOverrides = Field(default_factory=DisplayOverrides)
     timers: list[TimerEntry] = Field(default_factory=list)
