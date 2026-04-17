@@ -4,6 +4,7 @@ from uuid import UUID, uuid4
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QFormLayout,
     QHBoxLayout,
@@ -14,6 +15,7 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QSplitter,
     QStackedWidget,
+    QTextEdit,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -95,16 +97,30 @@ class CharacterEditor(QWidget):
 
         layout = QFormLayout(self)
         self.name_edit = QLineEdit(self)
-        self.login_edit = QLineEdit(self)
+        self.password_edit = QLineEdit(self)
+        self.password_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.login_script_edit = QTextEdit(self)
+        self.login_script_edit.setPlaceholderText(
+            "One line per command. Use %NAME% and %PASSWORD% placeholders."
+        )
+        self.login_script_edit.setMaximumHeight(160)
         self.world_combo = QComboBox(self)
+        self.split_input_check = QCheckBox("Enable second input split", self)
+        self.launch_on_startup_check = QCheckBox("Launch on startup", self)
 
         layout.addRow("Name", self.name_edit)
-        layout.addRow("Login", self.login_edit)
+        layout.addRow("Password", self.password_edit)
+        layout.addRow("Startup Login Script", self.login_script_edit)
         layout.addRow("World", self.world_combo)
+        layout.addRow("Input", self.split_input_check)
+        layout.addRow("Startup", self.launch_on_startup_check)
 
         self.name_edit.editingFinished.connect(self._apply)
-        self.login_edit.editingFinished.connect(self._apply)
+        self.password_edit.editingFinished.connect(self._apply)
+        self.login_script_edit.textChanged.connect(self._apply)
         self.world_combo.currentIndexChanged.connect(self._on_world_changed)
+        self.split_input_check.stateChanged.connect(lambda _s: self._apply())
+        self.launch_on_startup_check.stateChanged.connect(lambda _s: self._apply())
 
     def refresh_worlds(self) -> None:
         selected = self.world_combo.currentData()
@@ -123,13 +139,22 @@ class CharacterEditor(QWidget):
         self.refresh_worlds()
         if character is None:
             self.name_edit.clear()
-            self.login_edit.clear()
+            self.password_edit.clear()
+            self.login_script_edit.clear()
+            self.split_input_check.setChecked(False)
+            self.launch_on_startup_check.setChecked(False)
             self.setEnabled(False)
             return
 
         self.setEnabled(True)
         self.name_edit.setText(character.name)
-        self.login_edit.setText(character.login)
+        self.password_edit.setText(character.password)
+        script = character.login_script or character.login
+        self.login_script_edit.blockSignals(True)
+        self.login_script_edit.setPlainText(script)
+        self.login_script_edit.blockSignals(False)
+        self.split_input_check.setChecked(character.split_input)
+        self.launch_on_startup_check.setChecked(character.launch_on_startup)
         idx = self.world_combo.findData(character.world_id)
         if idx >= 0:
             self.world_combo.setCurrentIndex(idx)
@@ -138,7 +163,11 @@ class CharacterEditor(QWidget):
         if self._character is None:
             return
         self._character.name = self.name_edit.text().strip()
-        self._character.login = self.login_edit.text()
+        self._character.password = self.password_edit.text()
+        self._character.login_script = self.login_script_edit.toPlainText()
+        self._character.login = self._character.login_script
+        self._character.split_input = self.split_input_check.isChecked()
+        self._character.launch_on_startup = self.launch_on_startup_check.isChecked()
         save_character(self._character)
         self.changed.emit()
 
@@ -152,6 +181,9 @@ class CharacterEditor(QWidget):
 
 
 class SettingsManager(QSplitter):
+    data_changed = Signal()
+    connect_character_requested = Signal(UUID)
+
     def __init__(self, settings: SettingsData, parent=None) -> None:
         super().__init__(parent)
         self.settings = settings
@@ -177,9 +209,11 @@ class SettingsManager(QSplitter):
         left_layout.addLayout(buttons)
 
         buttons2 = QHBoxLayout()
+        self.connect_char_btn = QPushButton("Connect", left)
         self.new_char_btn = QPushButton("New Character", left)
         self.copy_char_btn = QPushButton("Copy Character", left)
         self.del_char_btn = QPushButton("Delete Character", left)
+        buttons2.addWidget(self.connect_char_btn)
         buttons2.addWidget(self.new_char_btn)
         buttons2.addWidget(self.copy_char_btn)
         buttons2.addWidget(self.del_char_btn)
@@ -206,6 +240,7 @@ class SettingsManager(QSplitter):
         self.new_world_btn.clicked.connect(self._create_world)
         self.copy_world_btn.clicked.connect(self._copy_world)
         self.del_world_btn.clicked.connect(self._delete_world)
+        self.connect_char_btn.clicked.connect(self._connect_selected_character)
         self.new_char_btn.clicked.connect(self._create_character)
         self.copy_char_btn.clicked.connect(self._copy_character)
         self.del_char_btn.clicked.connect(self._delete_character)
@@ -306,6 +341,7 @@ class SettingsManager(QSplitter):
         self.settings.worlds[world.id] = world
         save_world(world)
         self.rebuild_tree()
+        self.data_changed.emit()
 
     def _copy_world(self) -> None:
         world_id = self._selected_world_id()
@@ -321,6 +357,7 @@ class SettingsManager(QSplitter):
         self.settings.worlds[copy.id] = copy
         save_world(copy)
         self.rebuild_tree()
+        self.data_changed.emit()
 
     def _delete_world(self) -> None:
         world_id = self._selected_world_id()
@@ -350,6 +387,14 @@ class SettingsManager(QSplitter):
         del self.settings.worlds[world_id]
         delete_world(world_id)
         self.rebuild_tree()
+        self.data_changed.emit()
+
+    def _connect_selected_character(self) -> None:
+        char_id = self._selected_character_id()
+        if char_id is None:
+            QMessageBox.information(self, "Select Character", "Select a character first.")
+            return
+        self.connect_character_requested.emit(char_id)
 
     def _create_character(self) -> None:
         world_id = self._selected_world_id()
@@ -361,6 +406,7 @@ class SettingsManager(QSplitter):
         self.settings.characters[char.id] = char
         save_character(char)
         self.rebuild_tree()
+        self.data_changed.emit()
 
     def _copy_character(self) -> None:
         char_id = self._selected_character_id()
@@ -378,6 +424,7 @@ class SettingsManager(QSplitter):
         self.settings.characters[copy.id] = copy
         save_character(copy)
         self.rebuild_tree()
+        self.data_changed.emit()
 
     def _delete_character(self) -> None:
         char_id = self._selected_character_id()
@@ -406,6 +453,7 @@ class SettingsManager(QSplitter):
         del self.settings.characters[char_id]
         delete_character(char_id)
         self.rebuild_tree()
+        self.data_changed.emit()
 
     def _rehome_character(self, char_id: UUID, target_world_id: UUID) -> None:
         character = self.settings.characters.get(char_id)
@@ -424,3 +472,4 @@ class SettingsManager(QSplitter):
         character.world_id = target_world_id
         save_character(character)
         self.rebuild_tree()
+        self.data_changed.emit()

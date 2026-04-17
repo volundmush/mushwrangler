@@ -9,10 +9,11 @@ from PySide6.QtGui import (
     QTextCharFormat,
     QTextCursor,
 )
-from PySide6.QtWidgets import QSplitter, QTextEdit
+from PySide6.QtWidgets import QMenu, QSplitter, QTextEdit
 
 from mushwrangler.ansi import ANSIParser
 from mushwrangler.models import Character, World
+from mushwrangler.settings import save_character
 from mushwrangler.transport import ClientConnection
 
 
@@ -115,21 +116,27 @@ class MUClientInstance(QSplitter):
 
         self.addWidget(self.output_split)
 
-        self.input = CommandInput(self)
-        self.input.setAcceptRichText(False)
-        self.input.setPlaceholderText("Type command and press Enter (Shift+Enter for newline)")
-        self.input.setMaximumHeight(130)
-        self.addWidget(self.input)
+        self.input_split = QSplitter(Qt.Orientation.Horizontal, self)
+        self.input_split.setChildrenCollapsible(False)
+        self.input_split.setHandleWidth(4)
+
+        self.input = self._build_input_widget(self.input_split)
+        self.input2 = self._build_input_widget(self.input_split)
+        self.input2.hide()
+        self.input_split.setSizes([1000, 0])
+        self.addWidget(self.input_split)
 
         self.output.setFont(mono)
         self.tail_output.setFont(mono)
         self.input.setFont(mono)
+        self.input2.setFont(mono)
         self.tail_output.hide()
 
         self.setChildrenCollapsible(False)
         self.setSizes([860, 160])
 
         self.input.line_submitted.connect(self._send_user_line)
+        self.input2.line_submitted.connect(self._send_user_line)
         self._connection.connected.connect(self._on_connected)
         self._connection.disconnected.connect(self._on_disconnected)
         self._connection.text_received.connect(self._on_text_received)
@@ -140,7 +147,46 @@ class MUClientInstance(QSplitter):
         self._append_status(
             f"Target host: {host.address}:{host.port} (tls={host.tls})"
         )
+        self._set_split_input_enabled(self.character.split_input)
         self._connection.start()
+
+    def _build_input_widget(self, parent) -> CommandInput:
+        widget = CommandInput(parent)
+        widget.setAcceptRichText(False)
+        widget.setPlaceholderText("Type command and press Enter (Shift+Enter for newline)")
+        widget.setMaximumHeight(130)
+        widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        widget.customContextMenuRequested.connect(
+            lambda pos, w=widget: self._show_input_context_menu(w, pos)
+        )
+        return widget
+
+    def _show_input_context_menu(self, widget: CommandInput, pos) -> None:
+        menu = widget.createStandardContextMenu()
+        menu.addSeparator()
+        toggle = menu.addAction("Enable Second Input" if not self.character.split_input else "Disable Second Input")
+        toggle.triggered.connect(lambda: self._toggle_split_input())
+        menu.exec(widget.mapToGlobal(pos))
+
+    def _toggle_split_input(self) -> None:
+        self._set_split_input_enabled(not self.character.split_input, persist=True)
+
+    def _set_split_input_enabled(self, enabled: bool, persist: bool = False) -> None:
+        self.character.split_input = enabled
+        if enabled:
+            self.input2.show()
+            self.input_split.setSizes([500, 500])
+            self.input2.setFocus()
+        else:
+            self.input2.hide()
+            self.input_split.setSizes([1000, 0])
+            self.input.setFocus()
+
+        if persist:
+            save_character(self.character)
+
+    def sync_character_preferences(self) -> None:
+        self._set_split_input_enabled(self.character.split_input)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self._connection.close()
@@ -153,8 +199,9 @@ class MUClientInstance(QSplitter):
 
     def _on_connected(self) -> None:
         self._append_status("Session connected")
-        if self.character.login:
-            self._send_user_line(self.character.login)
+        script = self.character.login_script or self.character.login
+        if script:
+            self._send_login_script(script)
 
     def _on_disconnected(self, reason: str) -> None:
         self._append_status(f"Session disconnected: {reason}")
@@ -229,4 +276,15 @@ class MUClientInstance(QSplitter):
             self._append_status("Not connected; command not sent")
             return
         self.input.add_history(text)
+        self.input2.add_history(text)
         self._connection.send_line(text)
+
+    def _send_login_script(self, script: str) -> None:
+        name = self.character.name
+        password = self.character.password
+        for line in script.splitlines():
+            expanded = line.replace("%NAME%", name).replace("%PASSWORD%", password)
+            command = expanded.strip("\r\n")
+            if not command:
+                continue
+            self._send_user_line(command)

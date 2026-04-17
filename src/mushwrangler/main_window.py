@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from PySide6.QtCore import QEvent, QObject, Qt
+from PySide6.QtCore import QEvent, QObject, Qt, Signal
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QMainWindow, QMdiArea, QMdiSubWindow, QStatusBar, QToolBar
 
@@ -34,14 +34,32 @@ class _SessionWindowEventFilter(QObject):
         return super().eventFilter(watched, event)
 
 
+class _SessionSubWindow(QMdiSubWindow):
+    geometry_changed = Signal()
+
+    def moveEvent(self, event) -> None:
+        super().moveEvent(event)
+        self.geometry_changed.emit()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self.geometry_changed.emit()
+
+    def closeEvent(self, event) -> None:
+        self.geometry_changed.emit()
+        super().closeEvent(event)
+
+
 class MUSHWranglerWindow(QMainWindow):
     def __init__(self, settings: SettingsData, parent=None) -> None:
         super().__init__(parent)
         self.settings = settings
         self._session_actions: dict[QMdiSubWindow, QAction] = {}
+        self._character_menu_actions: dict[UUID, QAction] = {}
         self._session_windows_by_character: dict[UUID, QMdiSubWindow] = {}
         self._session_filters: dict[QMdiSubWindow, _SessionWindowEventFilter] = {}
         self._settings_widget: SettingsManager | None = None
+        self._settings_subwindow: QMdiSubWindow | None = None
 
         self.setObjectName("mainwindow")
         self.setWindowTitle("MUSHWrangler")
@@ -59,31 +77,31 @@ class MUSHWranglerWindow(QMainWindow):
         self._add_seed_windows()
 
     def _add_seed_windows(self) -> None:
-        settings_widget = SettingsManager(self.settings, self)
-        self._settings_widget = settings_widget
-        settings_sub = QMdiSubWindow(self.mdi_area)
-        settings_sub.setWidget(settings_widget)
-        settings_sub.setWindowTitle("Settings")
-        self.mdi_area.addSubWindow(settings_sub)
-        settings_sub.resize(520, 560)
-        settings_sub.move(80, 80)
-        settings_sub.show()
+        if not self.settings.characters:
+            self.show_settings_window()
 
-        first_character = next(iter(self.settings.characters.values()), None)
-        if first_character is not None:
-            win = self._open_character_session(first_character)
-            self._layout_new_session_windows(
-                [w for w in [win] if w is not None and not self._has_saved_window_state(w)]
-            )
+        startup_windows: list[QMdiSubWindow] = []
+        for character in self.settings.characters.values():
+            if not character.launch_on_startup:
+                continue
+            startup_windows.append(self._open_character_session(character))
+
+        self._layout_new_session_windows(
+            [w for w in startup_windows if w is not None and not self._has_saved_window_state(w)]
+        )
 
         self._refresh_in_use_characters()
+        self._refresh_character_menu()
 
     def _build_menu_bar(self) -> None:
         file_menu = self.menuBar().addMenu("&File")
         edit_menu = self.menuBar().addMenu("&Edit")
         view_menu = self.menuBar().addMenu("&View")
+        launch_menu = self.menuBar().addMenu("&Launch")
         session_menu = self.menuBar().addMenu("&Session")
         help_menu = self.menuBar().addMenu("&Help")
+
+        self._character_menu = launch_menu.addMenu("Characters")
 
         tile_action = QAction("Tile Sessions", self)
         tile_action.triggered.connect(self.mdi_area.tileSubWindows)
@@ -101,8 +119,11 @@ class MUSHWranglerWindow(QMainWindow):
         close_active_action.triggered.connect(self._close_active_subwindow)
         session_menu.addAction(close_active_action)
 
+        settings_action = QAction("Settings", self)
+        settings_action.triggered.connect(self.show_settings_window)
+
         file_menu.addAction("Quit", self.close)
-        edit_menu.addAction("Preferences")
+        edit_menu.addAction(settings_action)
         help_menu.addAction("About")
 
     def _build_toolbars(self) -> None:
@@ -141,7 +162,7 @@ class MUSHWranglerWindow(QMainWindow):
         world = self.settings.worlds[character.world_id]
         client = MUClientInstance(character, world, self)
 
-        sub = QMdiSubWindow(self.mdi_area)
+        sub = _SessionSubWindow(self.mdi_area)
         sub.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         sub.setWidget(client)
         sub.setWindowTitle(f"{world.name} - {character.name}")
@@ -167,6 +188,12 @@ class MUSHWranglerWindow(QMainWindow):
         self._session_actions[sub] = action
         self._session_windows_by_character[character.id] = sub
 
+        sub.geometry_changed.connect(
+            lambda char_id=character.id, window=sub: self._store_character_window_state(
+                char_id, window
+            )
+        )
+
         filt = _SessionWindowEventFilter(self, character.id, sub)
         sub.installEventFilter(filt)
         self._session_filters[sub] = filt
@@ -178,6 +205,7 @@ class MUSHWranglerWindow(QMainWindow):
         )
         self._normalize_subwindow_positions()
         self._refresh_in_use_characters()
+        self._refresh_character_menu()
         return sub
 
     def _on_session_window_destroyed(
@@ -192,6 +220,7 @@ class MUSHWranglerWindow(QMainWindow):
         if filt is not None:
             filt.deleteLater()
         self._refresh_in_use_characters()
+        self._refresh_character_menu()
 
     def _layout_new_session_windows(self, windows: list[QMdiSubWindow]) -> None:
         if not windows:
@@ -248,6 +277,8 @@ class MUSHWranglerWindow(QMainWindow):
         character = self.settings.characters.get(character_id)
         if character is None:
             return
+        if window not in self.mdi_area.subWindowList():
+            return
         geo = window.geometry()
         character.window = WindowState(
             x=geo.x(),
@@ -276,6 +307,81 @@ class MUSHWranglerWindow(QMainWindow):
                 in_use.add(character_id)
 
         self._settings_widget.set_in_use_characters(in_use)
+
+    def _refresh_character_menu(self) -> None:
+        self._character_menu.clear()
+        self._character_menu_actions.clear()
+
+        characters = list(self.settings.characters.values())
+        if not characters:
+            action = QAction("No characters", self)
+            action.setEnabled(False)
+            self._character_menu.addAction(action)
+            return
+
+        for character in sorted(characters, key=lambda c: c.name.lower()):
+            world = self.settings.worlds.get(character.world_id)
+            label = character.name
+            if world is not None:
+                label = f"{character.name} ({world.name})"
+            action = QAction(label, self)
+            action.triggered.connect(
+                lambda checked=False, char_id=character.id: self._connect_character_by_id(
+                    char_id
+                )
+            )
+            self._character_menu.addAction(action)
+            self._character_menu_actions[character.id] = action
+
+    def _connect_character_by_id(self, character_id: UUID) -> None:
+        character = self.settings.characters.get(character_id)
+        if character is None:
+            return
+        self._open_character_session(character)
+
+    def show_settings_window(self) -> None:
+        if self._settings_subwindow is not None and self._settings_subwindow in self.mdi_area.subWindowList():
+            self._activate_subwindow(self._settings_subwindow)
+            return
+
+        settings_widget = SettingsManager(self.settings, self)
+        settings_widget.connect_character_requested.connect(self._connect_character_by_id)
+        settings_widget.data_changed.connect(self._on_settings_data_changed)
+        self._settings_widget = settings_widget
+
+        settings_sub = QMdiSubWindow(self.mdi_area)
+        settings_sub.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        settings_sub.setWidget(settings_widget)
+        settings_sub.setWindowTitle("Settings")
+        self.mdi_area.addSubWindow(settings_sub)
+        settings_sub.resize(700, 620)
+        settings_sub.move(80, 80)
+        settings_sub.show()
+
+        self._settings_subwindow = settings_sub
+        settings_sub.destroyed.connect(self._on_settings_window_destroyed)
+        self._refresh_in_use_characters()
+
+    def _on_settings_window_destroyed(self, *_args) -> None:
+        self._settings_subwindow = None
+        self._settings_widget = None
+
+    def _on_settings_data_changed(self) -> None:
+        stale_ids = [cid for cid in self._session_windows_by_character if cid not in self.settings.characters]
+        for char_id in stale_ids:
+            window = self._session_windows_by_character.get(char_id)
+            if window is not None and window in self.mdi_area.subWindowList():
+                window.close()
+
+        for char_id, window in self._session_windows_by_character.items():
+            if window not in self.mdi_area.subWindowList():
+                continue
+            client = window.widget()
+            if isinstance(client, MUClientInstance):
+                client.sync_character_preferences()
+
+        self._refresh_character_menu()
+        self._refresh_in_use_characters()
 
     def _ensure_window_on_canvas(self, window: QMdiSubWindow) -> None:
         area = self.mdi_area.viewport().rect()

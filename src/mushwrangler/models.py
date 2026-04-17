@@ -48,5 +48,9 @@ class Character(BaseModel):
     name: str = ""
     proxy_id: Optional[UUID] = None
     login: str = ""
+    password: str = ""
+    login_script: str = ""
     host_override: Optional[Host] = None
     window: Optional[WindowState] = None
+    split_input: bool = False
+    launch_on_startup: bool = False
