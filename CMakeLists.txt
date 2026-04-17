@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.19)
+cmake_minimum_required(VERSION 3.31)
 project(MUSHWrangler LANGUAGES CXX)
 
 find_package(Qt6 REQUIRED COMPONENTS Core Widgets LinguistTools Network Qml)

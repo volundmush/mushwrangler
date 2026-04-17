@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mushwrangler"
+version = "0.1.0"
+description = "A lightweight PySide6 MUD/MUSH client"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "PySide6>=6.8",
+  "orjson"
+]
+
+[project.scripts]
+mushwrangler = "mushwrangler.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mushwrangler"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "src/mushwrangler",
+  "pyproject.toml",
+  "README.md",
+]
