@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtNetwork import QAbstractSocket, QNetworkProxy, QSslSocket, QTcpSocket
 
 from mushwrangler.models import Character, World
-from mushwrangler.telnet import TelnetData, parse_telnet
+from mushwrangler.telnet import TelnetCode, TelnetCommand, TelnetData, parse_telnet
 
 
 class ClientConnection(QObject):
@@ -21,6 +21,10 @@ class ClientConnection(QObject):
         self._buffer = bytearray()
         self._app_buffer_size = 262_144
         self._sub_buffer_size = 262_144
+        self._telnet_nop_timer = QTimer(self)
+        self._telnet_nop_timer.setInterval(30_000)
+        self._telnet_nop_timer.timeout.connect(self._send_telnet_nop)
+        self.connected.connect(self._on_session_connected)
 
     def start(self) -> None:
         if self._socket is not None:
@@ -35,6 +39,8 @@ class ClientConnection(QObject):
             socket.connected.connect(self.connected)
 
         socket.setProxy(self._build_proxy())
+        if self._world.tcp_keepalive:
+            socket.setSocketOption(QAbstractSocket.SocketOption.KeepAliveOption, 1)
 
         socket.readyRead.connect(self._on_ready_read)
         socket.disconnected.connect(self._on_disconnected)
@@ -83,6 +89,7 @@ class ClientConnection(QObject):
         self._socket.flush()
 
     def close(self) -> None:
+        self._telnet_nop_timer.stop()
         if self._socket is None:
             return
 
@@ -131,8 +138,22 @@ class ClientConnection(QObject):
             if isinstance(msg, TelnetData):
                 if msg.data:
                     self.text_received.emit(msg.data)
+            elif isinstance(msg, TelnetCommand) and msg.command == TelnetCode.NOP:
+                continue
             elif msg is not None:
                 self.debug_received.emit(str(msg))
+
+    def _on_session_connected(self) -> None:
+        if self._world.telnet_nop_ping:
+            self._telnet_nop_timer.start()
+
+    def _send_telnet_nop(self) -> None:
+        if self._socket is None:
+            return
+        if self._socket.state() != QAbstractSocket.SocketState.ConnectedState:
+            return
+        self._socket.write(bytes([TelnetCode.IAC.value, TelnetCode.NOP.value]))
+        self._socket.flush()
 
     def _on_disconnected(self) -> None:
         self.disconnected.emit("Connection closed")

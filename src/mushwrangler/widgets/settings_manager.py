@@ -428,6 +428,8 @@ class WorldConnectEditor(QWidget):
         self.port_spin.setRange(1, 65535)
         self.tls_combo = QComboBox(self)
         self.tls_combo.addItems(["False", "True"])
+        self.tcp_keepalive_check = QCheckBox("Enable TCP keepalive", self)
+        self.telnet_nop_ping_check = QCheckBox("Send Telnet IAC NOP pings", self)
         self.proxy_type_combo = QComboBox(self)
         self.proxy_type_combo.addItems(PROXY_TYPES)
         self.proxy_host_edit = QLineEdit(self)
@@ -441,6 +443,8 @@ class WorldConnectEditor(QWidget):
         layout.addRow("Host", self.host_edit)
         layout.addRow("Port", self.port_spin)
         layout.addRow("TLS", self.tls_combo)
+        layout.addRow("TCP Keepalive", self.tcp_keepalive_check)
+        layout.addRow("Telnet NOP Pings", self.telnet_nop_ping_check)
         layout.addRow("Proxy Type", self.proxy_type_combo)
         layout.addRow("Proxy Host", self.proxy_host_edit)
         layout.addRow("Proxy Port", self.proxy_port_spin)
@@ -451,6 +455,8 @@ class WorldConnectEditor(QWidget):
         self.host_edit.editingFinished.connect(self._apply)
         self.port_spin.valueChanged.connect(lambda _v: self._apply())
         self.tls_combo.currentIndexChanged.connect(lambda _i: self._apply())
+        self.tcp_keepalive_check.stateChanged.connect(lambda _s: self._apply())
+        self.telnet_nop_ping_check.stateChanged.connect(lambda _s: self._apply())
         self.proxy_type_combo.currentIndexChanged.connect(lambda _i: self._apply())
         self.proxy_host_edit.editingFinished.connect(self._apply)
         self.proxy_port_spin.valueChanged.connect(lambda _v: self._apply())
@@ -465,6 +471,8 @@ class WorldConnectEditor(QWidget):
             self.host_edit.clear()
             self.port_spin.setValue(1)
             self.tls_combo.setCurrentIndex(0)
+            self.tcp_keepalive_check.setChecked(False)
+            self.telnet_nop_ping_check.setChecked(False)
             self.proxy_type_combo.setCurrentIndex(0)
             self.proxy_host_edit.clear()
             self.proxy_port_spin.setValue(0)
@@ -476,6 +484,8 @@ class WorldConnectEditor(QWidget):
         self.host_edit.setText(world.host.address)
         self.port_spin.setValue(world.host.port or 1)
         self.tls_combo.setCurrentIndex(1 if world.host.tls else 0)
+        self.tcp_keepalive_check.setChecked(world.tcp_keepalive)
+        self.telnet_nop_ping_check.setChecked(world.telnet_nop_ping)
         proxy_type = world.proxy.type
         idx = self.proxy_type_combo.findText(proxy_type)
         if idx < 0:
@@ -496,6 +506,8 @@ class WorldConnectEditor(QWidget):
             port=self.port_spin.value(),
             tls=self.tls_combo.currentIndex() == 1,
         )
+        self._world.tcp_keepalive = self.tcp_keepalive_check.isChecked()
+        self._world.telnet_nop_ping = self.telnet_nop_ping_check.isChecked()
         self._world.proxy = ProxySettings(
             type=self.proxy_type_combo.currentText(),
             host_name=self.proxy_host_edit.text().strip(),

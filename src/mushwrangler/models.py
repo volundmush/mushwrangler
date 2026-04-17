@@ -98,6 +98,8 @@ class World(BaseModel):
     id: UUID = Field(default_factory=uuid4)
     name: str = ""
     host: Host = Field(default_factory=Host)
+    tcp_keepalive: bool = False
+    telnet_nop_ping: bool = False
     proxy: ProxySettings = Field(default_factory=ProxySettings)
     proxy_id: Optional[UUID] = None
     display: DisplayOverrides = Field(default_factory=DisplayOverrides)
