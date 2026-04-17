@@ -6,7 +6,7 @@ from uuid import UUID
 
 from PySide6.QtCore import QStandardPaths
 
-from mushwrangler.models import Character, Host, WindowState, World
+from mushwrangler.models import Character, World
 
 
 class SettingsData:
@@ -120,22 +120,3 @@ def delete_character(character_id: UUID, root: Path | None = None) -> None:
     root_path = root or app_data_dir()
     _, chars_dir = _ensure_layout(root_path)
     (chars_dir / f"{character_id}.json").unlink(missing_ok=True)
-
-
-def seed_demo_settings() -> SettingsData:
-    settings = SettingsData()
-
-    world = World(
-        name="Convergence MUSH",
-        host=Host(address="game.convergencemush.org", port=10000, tls=False),
-    )
-    settings.worlds[world.id] = world
-
-    volund = Character(
-        world_id=world.id,
-        name="Volund",
-        window=WindowState(x=20, y=20, width=920, height=560),
-    )
-    settings.characters[volund.id] = volund
-
-    return settings

@@ -41,6 +41,7 @@ class MUSHWranglerWindow(QMainWindow):
         self._session_actions: dict[QMdiSubWindow, QAction] = {}
         self._session_windows_by_character: dict[UUID, QMdiSubWindow] = {}
         self._session_filters: dict[QMdiSubWindow, _SessionWindowEventFilter] = {}
+        self._settings_widget: SettingsManager | None = None
 
         self.setObjectName("mainwindow")
         self.setWindowTitle("MUSHWrangler")
@@ -58,11 +59,8 @@ class MUSHWranglerWindow(QMainWindow):
         self._add_seed_windows()
 
     def _add_seed_windows(self) -> None:
-        session_windows: list[QMdiSubWindow] = []
-        for character in self.settings.characters.values():
-            session_windows.append(self._open_character_session(character))
-
         settings_widget = SettingsManager(self.settings, self)
+        self._settings_widget = settings_widget
         settings_sub = QMdiSubWindow(self.mdi_area)
         settings_sub.setWidget(settings_widget)
         settings_sub.setWindowTitle("Settings")
@@ -70,9 +68,15 @@ class MUSHWranglerWindow(QMainWindow):
         settings_sub.resize(520, 560)
         settings_sub.move(80, 80)
         settings_sub.show()
-        self._layout_new_session_windows(
-            [w for w in session_windows if w is not None and not self._has_saved_window_state(w)]
-        )
+
+        first_character = next(iter(self.settings.characters.values()), None)
+        if first_character is not None:
+            win = self._open_character_session(first_character)
+            self._layout_new_session_windows(
+                [w for w in [win] if w is not None and not self._has_saved_window_state(w)]
+            )
+
+        self._refresh_in_use_characters()
 
     def _build_menu_bar(self) -> None:
         file_menu = self.menuBar().addMenu("&File")
@@ -173,6 +177,7 @@ class MUSHWranglerWindow(QMainWindow):
             )
         )
         self._normalize_subwindow_positions()
+        self._refresh_in_use_characters()
         return sub
 
     def _on_session_window_destroyed(
@@ -186,6 +191,7 @@ class MUSHWranglerWindow(QMainWindow):
         filt = self._session_filters.pop(window, None)
         if filt is not None:
             filt.deleteLater()
+        self._refresh_in_use_characters()
 
     def _layout_new_session_windows(self, windows: list[QMdiSubWindow]) -> None:
         if not windows:
@@ -258,6 +264,18 @@ class MUSHWranglerWindow(QMainWindow):
             character = self.settings.characters.get(character_id)
             return character is not None and character.window is not None
         return False
+
+    def _refresh_in_use_characters(self) -> None:
+        if self._settings_widget is None:
+            return
+
+        in_use: set[UUID] = set()
+        windows = set(self.mdi_area.subWindowList())
+        for character_id, sub in self._session_windows_by_character.items():
+            if sub in windows:
+                in_use.add(character_id)
+
+        self._settings_widget.set_in_use_characters(in_use)
 
     def _ensure_window_on_canvas(self, window: QMdiSubWindow) -> None:
         area = self.mdi_area.viewport().rect()
