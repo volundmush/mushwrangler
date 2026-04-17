@@ -148,6 +148,7 @@ class MUClientInstance(QSplitter):
             f"Target host: {host.address}:{host.port} (tls={host.tls})"
         )
         self._set_split_input_enabled(self.character.split_input)
+        self.apply_display_preferences()
         self._connection.start()
 
     def _build_input_widget(self, parent) -> CommandInput:
@@ -187,6 +188,48 @@ class MUClientInstance(QSplitter):
 
     def sync_character_preferences(self) -> None:
         self._set_split_input_enabled(self.character.split_input)
+        self.apply_display_preferences()
+
+    def apply_display_preferences(self) -> None:
+        from mushwrangler.settings import load_settings
+
+        data = load_settings()
+        global_display = data.global_settings.display
+        world = data.worlds.get(self.character.world_id, self.world)
+
+        charset = global_display.charset
+        in_spec = global_display.input_text
+        out_spec = global_display.output_text
+
+        if world is not None:
+            if world.display.charset:
+                charset = world.display.charset
+            if world.display.input_text:
+                in_spec = world.display.input_text
+            if world.display.output_text:
+                out_spec = world.display.output_text
+
+        if self.character.display.charset:
+            charset = self.character.display.charset
+        if self.character.display.input_text:
+            in_spec = self.character.display.input_text
+        if self.character.display.output_text:
+            out_spec = self.character.display.output_text
+
+        self._ansi_charset = charset
+
+        in_font = self.input.font()
+        in_font.setFamily(in_spec.family or in_font.family())
+        in_font.setPointSize(in_spec.size)
+
+        out_font = self.output.font()
+        out_font.setFamily(out_spec.family or out_font.family())
+        out_font.setPointSize(out_spec.size)
+
+        self.input.setFont(in_font)
+        self.input2.setFont(in_font)
+        self.output.setFont(out_font)
+        self.tail_output.setFont(out_font)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self._connection.close()
@@ -210,6 +253,11 @@ class MUClientInstance(QSplitter):
         self._append_status(f"[telnet] {line}")
 
     def _on_text_received(self, data: bytes) -> None:
+        if hasattr(self, "_ansi_charset") and self._ansi_charset.lower() != "utf-8":
+            try:
+                data = data.decode(self._ansi_charset, errors="replace").encode("utf-8")
+            except LookupError:
+                pass
         segments = self._ansi.parse(data)
         self._insert_segments(segments)
 

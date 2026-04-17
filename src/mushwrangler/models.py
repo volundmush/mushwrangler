@@ -22,6 +22,46 @@ class Host(BaseModel):
     tls: bool = False
 
 
+class FontSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    family: str = ""
+    style: str = "Normal"
+    size: int = 11
+
+
+class DisplaySettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    input_text: FontSpec = Field(default_factory=FontSpec)
+    output_text: FontSpec = Field(default_factory=FontSpec)
+    charset: str = "utf-8"
+
+
+class DisplayOverrides(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    input_text: Optional[FontSpec] = None
+    output_text: Optional[FontSpec] = None
+    charset: Optional[str] = None
+
+
+class TimerEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID = Field(default_factory=uuid4)
+    name: str = ""
+    interval_ms: int = 5000
+    command_script: str = ""
+    enabled: bool = True
+
+
+class GlobalSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    display: DisplaySettings = Field(default_factory=DisplaySettings)
+
+
 class WindowState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -38,6 +78,8 @@ class World(BaseModel):
     name: str = ""
     host: Host = Field(default_factory=Host)
     proxy_id: Optional[UUID] = None
+    display: DisplayOverrides = Field(default_factory=DisplayOverrides)
+    timers: list[TimerEntry] = Field(default_factory=list)
 
 
 class Character(BaseModel):
@@ -54,3 +96,5 @@ class Character(BaseModel):
     window: Optional[WindowState] = None
     split_input: bool = False
     launch_on_startup: bool = False
+    display: DisplayOverrides = Field(default_factory=DisplayOverrides)
+    timers: list[TimerEntry] = Field(default_factory=list)

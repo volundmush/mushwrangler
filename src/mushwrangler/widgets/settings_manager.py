@@ -10,6 +10,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMessageBox,
     QPushButton,
     QSpinBox,
@@ -22,24 +24,395 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from mushwrangler.models import Character, Host, World
+from mushwrangler.models import (
+    Character,
+    DisplayOverrides,
+    FontSpec,
+    GlobalSettings,
+    Host,
+    TimerEntry,
+    World,
+)
 from mushwrangler.settings import (
     SettingsData,
     delete_character,
     delete_world,
     save_character,
+    save_global_settings,
     save_world,
 )
 
+CHARSETS = ["ascii", "latin-1", "utf-8", "utf-16", "cp1252"]
 
-class WorldEditor(QWidget):
+
+def _resolve_display(
+    base_input: FontSpec,
+    base_output: FontSpec,
+    base_charset: str,
+    override: DisplayOverrides,
+) -> tuple[FontSpec, FontSpec, str]:
+    return (
+        override.input_text or base_input,
+        override.output_text or base_output,
+        override.charset or base_charset,
+    )
+
+
+class GlobalDisplayEditor(QWidget):
+    changed = Signal()
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._global: GlobalSettings | None = None
+
+        layout = QFormLayout(self)
+
+        self.in_family = QLineEdit(self)
+        self.in_style = QLineEdit(self)
+        self.in_size = QSpinBox(self)
+        self.in_size.setRange(6, 48)
+
+        self.out_family = QLineEdit(self)
+        self.out_style = QLineEdit(self)
+        self.out_size = QSpinBox(self)
+        self.out_size.setRange(6, 48)
+
+        self.charset = QComboBox(self)
+        self.charset.addItems(CHARSETS)
+
+        layout.addRow("Input Font Family", self.in_family)
+        layout.addRow("Input Font Style", self.in_style)
+        layout.addRow("Input Font Size", self.in_size)
+        layout.addRow("Output Font Family", self.out_family)
+        layout.addRow("Output Font Style", self.out_style)
+        layout.addRow("Output Font Size", self.out_size)
+        layout.addRow("Charset", self.charset)
+
+        self.in_family.editingFinished.connect(self._apply)
+        self.in_style.editingFinished.connect(self._apply)
+        self.in_size.valueChanged.connect(lambda _v: self._apply())
+        self.out_family.editingFinished.connect(self._apply)
+        self.out_style.editingFinished.connect(self._apply)
+        self.out_size.valueChanged.connect(lambda _v: self._apply())
+        self.charset.currentIndexChanged.connect(lambda _i: self._apply())
+
+    def set_global(self, global_settings: GlobalSettings | None) -> None:
+        self._global = global_settings
+        if global_settings is None:
+            self.setEnabled(False)
+            return
+
+        self.setEnabled(True)
+        d = global_settings.display
+        self.in_family.setText(d.input_text.family)
+        self.in_style.setText(d.input_text.style)
+        self.in_size.setValue(d.input_text.size)
+        self.out_family.setText(d.output_text.family)
+        self.out_style.setText(d.output_text.style)
+        self.out_size.setValue(d.output_text.size)
+        idx = self.charset.findText(d.charset)
+        if idx < 0:
+            self.charset.addItem(d.charset)
+            idx = self.charset.findText(d.charset)
+        self.charset.setCurrentIndex(max(idx, 0))
+
+    def _apply(self) -> None:
+        if self._global is None:
+            return
+        self._global.display.input_text = FontSpec(
+            family=self.in_family.text().strip(),
+            style=self.in_style.text().strip() or "Normal",
+            size=self.in_size.value(),
+        )
+        self._global.display.output_text = FontSpec(
+            family=self.out_family.text().strip(),
+            style=self.out_style.text().strip() or "Normal",
+            size=self.out_size.value(),
+        )
+        self._global.display.charset = self.charset.currentText()
+        save_global_settings(self._global)
+        self.changed.emit()
+
+
+class DisplayOverrideEditor(QWidget):
+    changed = Signal()
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._overrides: DisplayOverrides | None = None
+        self._save_callback = None
+        self._base_input = FontSpec()
+        self._base_output = FontSpec()
+        self._base_charset = "utf-8"
+
+        layout = QFormLayout(self)
+
+        self.enable_input = QCheckBox("Override input font", self)
+        self.in_family = QLineEdit(self)
+        self.in_style = QLineEdit(self)
+        self.in_size = QSpinBox(self)
+        self.in_size.setRange(6, 48)
+
+        self.enable_output = QCheckBox("Override output font", self)
+        self.out_family = QLineEdit(self)
+        self.out_style = QLineEdit(self)
+        self.out_size = QSpinBox(self)
+        self.out_size.setRange(6, 48)
+
+        self.enable_charset = QCheckBox("Override charset", self)
+        self.charset = QComboBox(self)
+        self.charset.addItems(CHARSETS)
+
+        layout.addRow(self.enable_input)
+        layout.addRow("Input Font Family", self.in_family)
+        layout.addRow("Input Font Style", self.in_style)
+        layout.addRow("Input Font Size", self.in_size)
+        layout.addRow(self.enable_output)
+        layout.addRow("Output Font Family", self.out_family)
+        layout.addRow("Output Font Style", self.out_style)
+        layout.addRow("Output Font Size", self.out_size)
+        layout.addRow(self.enable_charset)
+        layout.addRow("Charset", self.charset)
+
+        for w in [
+            self.enable_input,
+            self.enable_output,
+            self.enable_charset,
+        ]:
+            w.stateChanged.connect(lambda _s: self._apply())
+
+        for w in [
+            self.in_family,
+            self.in_style,
+            self.out_family,
+            self.out_style,
+        ]:
+            w.editingFinished.connect(self._apply)
+
+        self.in_size.valueChanged.connect(lambda _v: self._apply())
+        self.out_size.valueChanged.connect(lambda _v: self._apply())
+        self.charset.currentIndexChanged.connect(lambda _i: self._apply())
+
+    def set_target(
+        self,
+        overrides: DisplayOverrides | None,
+        base_input: FontSpec,
+        base_output: FontSpec,
+        base_charset: str,
+        save_callback,
+    ) -> None:
+        self._overrides = overrides
+        self._save_callback = save_callback
+        self._base_input = base_input
+        self._base_output = base_output
+        self._base_charset = base_charset
+
+        if overrides is None:
+            self.setEnabled(False)
+            return
+
+        self.setEnabled(True)
+        input_spec, output_spec, charset = _resolve_display(
+            base_input, base_output, base_charset, overrides
+        )
+
+        self.enable_input.setChecked(overrides.input_text is not None)
+        self.in_family.setText(input_spec.family)
+        self.in_style.setText(input_spec.style)
+        self.in_size.setValue(input_spec.size)
+
+        self.enable_output.setChecked(overrides.output_text is not None)
+        self.out_family.setText(output_spec.family)
+        self.out_style.setText(output_spec.style)
+        self.out_size.setValue(output_spec.size)
+
+        self.enable_charset.setChecked(overrides.charset is not None)
+        idx = self.charset.findText(charset)
+        if idx < 0:
+            self.charset.addItem(charset)
+            idx = self.charset.findText(charset)
+        self.charset.setCurrentIndex(max(idx, 0))
+
+    def _apply(self) -> None:
+        if self._overrides is None or self._save_callback is None:
+            return
+
+        if self.enable_input.isChecked():
+            self._overrides.input_text = FontSpec(
+                family=self.in_family.text().strip(),
+                style=self.in_style.text().strip() or "Normal",
+                size=self.in_size.value(),
+            )
+        else:
+            self._overrides.input_text = None
+
+        if self.enable_output.isChecked():
+            self._overrides.output_text = FontSpec(
+                family=self.out_family.text().strip(),
+                style=self.out_style.text().strip() or "Normal",
+                size=self.out_size.value(),
+            )
+        else:
+            self._overrides.output_text = None
+
+        if self.enable_charset.isChecked():
+            self._overrides.charset = self.charset.currentText()
+        else:
+            self._overrides.charset = None
+
+        self._save_callback()
+        self.changed.emit()
+
+
+class TimerEditor(QWidget):
+    changed = Signal()
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._timers: list[TimerEntry] | None = None
+        self._save_callback = None
+
+        outer = QVBoxLayout(self)
+        split = QSplitter(Qt.Orientation.Horizontal, self)
+
+        left = QWidget(split)
+        left_layout = QVBoxLayout(left)
+        self.list = QListWidget(left)
+        self.list.currentRowChanged.connect(self._on_timer_selected)
+        left_layout.addWidget(self.list)
+
+        list_buttons = QHBoxLayout()
+        self.add_btn = QPushButton("Add", left)
+        self.del_btn = QPushButton("Delete", left)
+        list_buttons.addWidget(self.add_btn)
+        list_buttons.addWidget(self.del_btn)
+        left_layout.addLayout(list_buttons)
+
+        right = QWidget(split)
+        right_form = QFormLayout(right)
+        self.name_edit = QLineEdit(right)
+        self.interval_spin = QSpinBox(right)
+        self.interval_spin.setRange(100, 3_600_000)
+        self.enabled_check = QCheckBox("Enabled", right)
+        self.script_edit = QTextEdit(right)
+        self.script_edit.setMaximumHeight(180)
+
+        right_form.addRow("Name", self.name_edit)
+        right_form.addRow("Interval (ms)", self.interval_spin)
+        right_form.addRow(self.enabled_check)
+        right_form.addRow("Command Script", self.script_edit)
+
+        split.setSizes([260, 420])
+        outer.addWidget(split)
+
+        self.add_btn.clicked.connect(self._add_timer)
+        self.del_btn.clicked.connect(self._delete_timer)
+        self.name_edit.editingFinished.connect(self._apply_current)
+        self.interval_spin.valueChanged.connect(lambda _v: self._apply_current())
+        self.enabled_check.stateChanged.connect(lambda _s: self._apply_current())
+        self.script_edit.textChanged.connect(self._apply_current)
+
+    def set_target(self, timers: list[TimerEntry] | None, save_callback) -> None:
+        self._timers = timers
+        self._save_callback = save_callback
+        self.list.blockSignals(True)
+        self.list.clear()
+
+        if timers is None:
+            self.list.blockSignals(False)
+            self.setEnabled(False)
+            return
+
+        self.setEnabled(True)
+        for timer in timers:
+            self.list.addItem(timer.name or "(unnamed timer)")
+        self.list.blockSignals(False)
+        if timers:
+            self.list.setCurrentRow(0)
+        else:
+            self._show_timer(None)
+
+    def _add_timer(self) -> None:
+        if self._timers is None:
+            return
+        timer = TimerEntry(id=uuid4(), name="New Timer", interval_ms=5000, command_script="")
+        self._timers.append(timer)
+        self.list.addItem(timer.name)
+        self.list.setCurrentRow(self.list.count() - 1)
+        self._save()
+
+    def _delete_timer(self) -> None:
+        if self._timers is None:
+            return
+        row = self.list.currentRow()
+        if row < 0 or row >= len(self._timers):
+            return
+        del self._timers[row]
+        self.list.takeItem(row)
+        if self._timers:
+            self.list.setCurrentRow(max(0, row - 1))
+        else:
+            self._show_timer(None)
+        self._save()
+
+    def _on_timer_selected(self, row: int) -> None:
+        if self._timers is None or row < 0 or row >= len(self._timers):
+            self._show_timer(None)
+            return
+        self._show_timer(self._timers[row])
+
+    def _show_timer(self, timer: TimerEntry | None) -> None:
+        enabled = timer is not None
+        self.name_edit.setEnabled(enabled)
+        self.interval_spin.setEnabled(enabled)
+        self.enabled_check.setEnabled(enabled)
+        self.script_edit.setEnabled(enabled)
+
+        self.name_edit.blockSignals(True)
+        self.interval_spin.blockSignals(True)
+        self.enabled_check.blockSignals(True)
+        self.script_edit.blockSignals(True)
+
+        self.name_edit.setText(timer.name if timer else "")
+        self.interval_spin.setValue(timer.interval_ms if timer else 1000)
+        self.enabled_check.setChecked(timer.enabled if timer else False)
+        self.script_edit.setPlainText(timer.command_script if timer else "")
+
+        self.name_edit.blockSignals(False)
+        self.interval_spin.blockSignals(False)
+        self.enabled_check.blockSignals(False)
+        self.script_edit.blockSignals(False)
+
+    def _apply_current(self) -> None:
+        if self._timers is None:
+            return
+        row = self.list.currentRow()
+        if row < 0 or row >= len(self._timers):
+            return
+        timer = self._timers[row]
+        timer.name = self.name_edit.text().strip()
+        timer.interval_ms = self.interval_spin.value()
+        timer.enabled = self.enabled_check.isChecked()
+        timer.command_script = self.script_edit.toPlainText()
+        item = self.list.item(row)
+        if item is not None:
+            item.setText(timer.name or "(unnamed timer)")
+        self._save()
+
+    def _save(self) -> None:
+        if self._save_callback is not None:
+            self._save_callback()
+        self.changed.emit()
+
+
+class WorldConnectEditor(QWidget):
     changed = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._world: World | None = None
-
         layout = QFormLayout(self)
+
         self.name_edit = QLineEdit(self)
         self.host_edit = QLineEdit(self)
         self.port_spin = QSpinBox(self)
@@ -60,13 +433,12 @@ class WorldEditor(QWidget):
     def set_world(self, world: World | None) -> None:
         self._world = world
         if world is None:
+            self.setEnabled(False)
             self.name_edit.clear()
             self.host_edit.clear()
             self.port_spin.setValue(1)
             self.tls_combo.setCurrentIndex(0)
-            self.setEnabled(False)
             return
-
         self.setEnabled(True)
         self.name_edit.setText(world.name)
         self.host_edit.setText(world.host.address)
@@ -86,7 +458,7 @@ class WorldEditor(QWidget):
         self.changed.emit()
 
 
-class CharacterEditor(QWidget):
+class CharacterConnectEditor(QWidget):
     changed = Signal()
     rehome_requested = Signal(UUID, UUID)
 
@@ -100,10 +472,7 @@ class CharacterEditor(QWidget):
         self.password_edit = QLineEdit(self)
         self.password_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self.login_script_edit = QTextEdit(self)
-        self.login_script_edit.setPlaceholderText(
-            "One line per command. Use %NAME% and %PASSWORD% placeholders."
-        )
-        self.login_script_edit.setMaximumHeight(160)
+        self.login_script_edit.setMaximumHeight(170)
         self.world_combo = QComboBox(self)
         self.split_input_check = QCheckBox("Enable second input split", self)
         self.launch_on_startup_check = QCheckBox("Launch on startup", self)
@@ -138,12 +507,12 @@ class CharacterEditor(QWidget):
         self._character = character
         self.refresh_worlds()
         if character is None:
+            self.setEnabled(False)
             self.name_edit.clear()
             self.password_edit.clear()
             self.login_script_edit.clear()
             self.split_input_check.setChecked(False)
             self.launch_on_startup_check.setChecked(False)
-            self.setEnabled(False)
             return
 
         self.setEnabled(True)
@@ -155,6 +524,7 @@ class CharacterEditor(QWidget):
         self.login_script_edit.blockSignals(False)
         self.split_input_check.setChecked(character.split_input)
         self.launch_on_startup_check.setChecked(character.launch_on_startup)
+
         idx = self.world_combo.findData(character.world_id)
         if idx >= 0:
             self.world_combo.setCurrentIndex(idx)
@@ -180,6 +550,29 @@ class CharacterEditor(QWidget):
         self.rehome_requested.emit(self._character.id, target_world_id)
 
 
+class CategoryPane(QWidget):
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        layout = QHBoxLayout(self)
+        self.categories = QListWidget(self)
+        self.pages = QStackedWidget(self)
+        layout.addWidget(self.categories)
+        layout.addWidget(self.pages)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self.categories.currentRowChanged.connect(self.pages.setCurrentIndex)
+
+    def set_sections(self, sections: list[tuple[str, QWidget]]) -> None:
+        self.categories.clear()
+        while self.pages.count():
+            widget = self.pages.widget(0)
+            self.pages.removeWidget(widget)
+        for name, widget in sections:
+            self.categories.addItem(QListWidgetItem(name))
+            self.pages.addWidget(widget)
+        if sections:
+            self.categories.setCurrentRow(0)
+
+
 class SettingsManager(QSplitter):
     data_changed = Signal()
     connect_character_requested = Signal(UUID)
@@ -193,7 +586,6 @@ class SettingsManager(QSplitter):
 
         left = QWidget(self)
         left_layout = QVBoxLayout(left)
-
         self.tree = QTreeWidget(left)
         self.tree.setHeaderLabel("Settings / Worlds / Characters")
         self.tree.currentItemChanged.connect(self._on_tree_selection)
@@ -219,23 +611,51 @@ class SettingsManager(QSplitter):
         buttons2.addWidget(self.del_char_btn)
         left_layout.addLayout(buttons2)
 
-        self.right = QStackedWidget(self)
-        self.global_page = QLabel("Global settings will go here.", self.right)
-        self.right.addWidget(self.global_page)
+        self.right_pages = QStackedWidget(self)
 
-        self.world_editor = WorldEditor(self.right)
-        self.world_editor.changed.connect(self._refresh_tree_texts)
-        self.right.addWidget(self.world_editor)
+        self.global_category = CategoryPane(self.right_pages)
+        self.global_display_editor = GlobalDisplayEditor(self.global_category)
+        self.global_display_editor.changed.connect(self._emit_data_changed)
+        self.global_category.set_sections([("Display", self.global_display_editor)])
+        self.right_pages.addWidget(self.global_category)
 
-        self.character_editor = CharacterEditor(self.settings, self.right)
-        self.character_editor.changed.connect(self._refresh_tree_texts)
-        self.character_editor.rehome_requested.connect(self._rehome_character)
-        self.right.addWidget(self.character_editor)
+        self.world_category = CategoryPane(self.right_pages)
+        self.world_connect_editor = WorldConnectEditor(self.world_category)
+        self.world_connect_editor.changed.connect(self._refresh_tree_texts)
+        self.world_display_editor = DisplayOverrideEditor(self.world_category)
+        self.world_display_editor.changed.connect(self._emit_data_changed)
+        self.world_timers_editor = TimerEditor(self.world_category)
+        self.world_timers_editor.changed.connect(self._emit_data_changed)
+        self.world_category.set_sections(
+            [
+                ("Connect Info", self.world_connect_editor),
+                ("Display", self.world_display_editor),
+                ("Timers", self.world_timers_editor),
+            ]
+        )
+        self.right_pages.addWidget(self.world_category)
+
+        self.character_category = CategoryPane(self.right_pages)
+        self.character_connect_editor = CharacterConnectEditor(self.settings, self.character_category)
+        self.character_connect_editor.changed.connect(self._refresh_tree_texts)
+        self.character_connect_editor.rehome_requested.connect(self._rehome_character)
+        self.character_display_editor = DisplayOverrideEditor(self.character_category)
+        self.character_display_editor.changed.connect(self._emit_data_changed)
+        self.character_timers_editor = TimerEditor(self.character_category)
+        self.character_timers_editor.changed.connect(self._emit_data_changed)
+        self.character_category.set_sections(
+            [
+                ("Connect Info", self.character_connect_editor),
+                ("Display", self.character_display_editor),
+                ("Timers", self.character_timers_editor),
+            ]
+        )
+        self.right_pages.addWidget(self.character_category)
 
         self.addWidget(left)
-        self.addWidget(self.right)
+        self.addWidget(self.right_pages)
         self.setChildrenCollapsible(False)
-        self.setSizes([420, 500])
+        self.setSizes([420, 760])
 
         self.new_world_btn.clicked.connect(self._create_world)
         self.copy_world_btn.clicked.connect(self._copy_world)
@@ -276,7 +696,11 @@ class SettingsManager(QSplitter):
 
         root.setExpanded(True)
         self.tree.expandAll()
-        self.character_editor.refresh_worlds()
+        self.character_connect_editor.refresh_worlds()
+        self.global_display_editor.set_global(self.settings.global_settings)
+
+    def _emit_data_changed(self) -> None:
+        self.data_changed.emit()
 
     def _refresh_tree_texts(self) -> None:
         for world_id, item in self._tree_items_by_world.items():
@@ -290,6 +714,8 @@ class SettingsManager(QSplitter):
             if character is not None:
                 item.setText(0, character.name or str(character.id))
                 save_character(character)
+
+        self.data_changed.emit()
 
     def _selected(self) -> tuple[str, UUID | None]:
         item = self.tree.currentItem()
@@ -316,25 +742,66 @@ class SettingsManager(QSplitter):
             return obj_id
         return None
 
-    def _on_tree_selection(self, current: QTreeWidgetItem | None, _previous: QTreeWidgetItem | None) -> None:
+    def _on_tree_selection(
+        self,
+        current: QTreeWidgetItem | None,
+        _previous: QTreeWidgetItem | None,
+    ) -> None:
         if current is None:
-            self.right.setCurrentWidget(self.global_page)
+            self.right_pages.setCurrentIndex(0)
             return
 
         kind, obj_id = current.data(0, Qt.ItemDataRole.UserRole)
+        if kind == "global":
+            self.global_display_editor.set_global(self.settings.global_settings)
+            self.right_pages.setCurrentWidget(self.global_category)
+            return
+
         if kind == "world" and obj_id is not None:
-            self.world_editor.set_world(self.settings.worlds.get(obj_id))
-            self.right.setCurrentWidget(self.world_editor)
+            world = self.settings.worlds.get(obj_id)
+            self.world_connect_editor.set_world(world)
+            if world is not None:
+                g = self.settings.global_settings.display
+                self.world_display_editor.set_target(
+                    world.display,
+                    g.input_text,
+                    g.output_text,
+                    g.charset,
+                    lambda w=world: save_world(w),
+                )
+                self.world_timers_editor.set_target(world.timers, lambda w=world: save_world(w))
+            self.right_pages.setCurrentWidget(self.world_category)
             return
 
         if kind == "character" and obj_id is not None:
-            self.character_editor.set_character(self.settings.characters.get(obj_id))
-            self.right.setCurrentWidget(self.character_editor)
+            character = self.settings.characters.get(obj_id)
+            self.character_connect_editor.set_character(character)
+            if character is not None:
+                world = self.settings.worlds.get(character.world_id)
+                g = self.settings.global_settings.display
+                base_input = g.input_text
+                base_output = g.output_text
+                base_charset = g.charset
+                if world is not None:
+                    base_input, base_output, base_charset = _resolve_display(
+                        base_input,
+                        base_output,
+                        base_charset,
+                        world.display,
+                    )
+                self.character_display_editor.set_target(
+                    character.display,
+                    base_input,
+                    base_output,
+                    base_charset,
+                    lambda c=character: save_character(c),
+                )
+                self.character_timers_editor.set_target(
+                    character.timers,
+                    lambda c=character: save_character(c),
+                )
+            self.right_pages.setCurrentWidget(self.character_category)
             return
-
-        self.world_editor.set_world(None)
-        self.character_editor.set_character(None)
-        self.right.setCurrentWidget(self.global_page)
 
     def _create_world(self) -> None:
         world = World(name="New World", host=Host(address="", port=4000, tls=False))
@@ -466,7 +933,7 @@ class SettingsManager(QSplitter):
                 "Character In Use",
                 "Cannot rehome a character while its session is open.",
             )
-            self.character_editor.set_character(character)
+            self.character_connect_editor.set_character(character)
             return
 
         character.world_id = target_world_id

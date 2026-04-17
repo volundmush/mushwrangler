@@ -6,13 +6,14 @@ from uuid import UUID
 
 from PySide6.QtCore import QStandardPaths
 
-from mushwrangler.models import Character, World
+from mushwrangler.models import Character, GlobalSettings, World
 
 
 class SettingsData:
     def __init__(self) -> None:
         self.worlds: dict[UUID, World] = {}
         self.characters: dict[UUID, Character] = {}
+        self.global_settings: GlobalSettings = GlobalSettings()
 
 
 def app_data_dir() -> Path:
@@ -32,9 +33,17 @@ def _ensure_layout(root: Path) -> tuple[Path, Path]:
     return worlds_dir, chars_dir
 
 
+def _settings_json_path(root: Path) -> Path:
+    return root / "settings.json"
+
+
 def save_settings(settings: SettingsData, root: Path | None = None) -> None:
     root_path = root or app_data_dir()
     worlds_dir, chars_dir = _ensure_layout(root_path)
+    _settings_json_path(root_path).write_text(
+        settings.global_settings.model_dump_json(indent=2),
+        encoding="utf-8",
+    )
 
     world_ids = {world.id for world in settings.worlds.values()}
     char_ids = {character.id for character in settings.characters.values()}
@@ -75,6 +84,14 @@ def load_settings(root: Path | None = None) -> SettingsData:
     worlds_dir, chars_dir = _ensure_layout(root_path)
 
     settings = SettingsData()
+    settings_json = _settings_json_path(root_path)
+    if settings_json.exists():
+        try:
+            settings.global_settings = GlobalSettings.model_validate_json(
+                settings_json.read_text(encoding="utf-8")
+            )
+        except (OSError, json.JSONDecodeError, ValueError):
+            settings.global_settings = GlobalSettings()
 
     for path in sorted(worlds_dir.glob("*.json")):
         try:
@@ -120,3 +137,12 @@ def delete_character(character_id: UUID, root: Path | None = None) -> None:
     root_path = root or app_data_dir()
     _, chars_dir = _ensure_layout(root_path)
     (chars_dir / f"{character_id}.json").unlink(missing_ok=True)
+
+
+def save_global_settings(global_settings: GlobalSettings, root: Path | None = None) -> None:
+    root_path = root or app_data_dir()
+    _ensure_layout(root_path)
+    _settings_json_path(root_path).write_text(
+        global_settings.model_dump_json(indent=2),
+        encoding="utf-8",
+    )
