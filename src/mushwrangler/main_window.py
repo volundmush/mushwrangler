@@ -2,36 +2,14 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from PySide6.QtCore import QEvent, QObject, Qt, Signal
-from PySide6.QtGui import QAction
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QAction, QCloseEvent
 from PySide6.QtWidgets import QMainWindow, QMdiArea, QMdiSubWindow, QStatusBar, QToolBar
 
 from mushwrangler.models import Character, WindowState
 from mushwrangler.settings import SettingsData, save_character
 from mushwrangler.widgets.client_instance import MUClientInstance
 from mushwrangler.widgets.settings_manager import SettingsManager
-
-
-class _SessionWindowEventFilter(QObject):
-    def __init__(
-        self,
-        owner: "MUSHWranglerWindow",
-        character_id: UUID,
-        window: QMdiSubWindow,
-    ) -> None:
-        super().__init__(owner)
-        self._owner = owner
-        self._character_id = character_id
-        self._window = window
-
-    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
-        if watched is self._window and event.type() in (
-            QEvent.Type.Move,
-            QEvent.Type.Resize,
-            QEvent.Type.Close,
-        ):
-            self._owner._store_character_window_state(self._character_id, self._window)
-        return super().eventFilter(watched, event)
 
 
 class _SessionSubWindow(QMdiSubWindow):
@@ -57,9 +35,9 @@ class MUSHWranglerWindow(QMainWindow):
         self._session_actions: dict[QMdiSubWindow, QAction] = {}
         self._character_menu_actions: dict[UUID, QAction] = {}
         self._session_windows_by_character: dict[UUID, QMdiSubWindow] = {}
-        self._session_filters: dict[QMdiSubWindow, _SessionWindowEventFilter] = {}
         self._settings_widget: SettingsManager | None = None
         self._settings_subwindow: QMdiSubWindow | None = None
+        self._shutting_down = False
 
         self.setObjectName("mainwindow")
         self.setWindowTitle("MUSHWrangler")
@@ -194,31 +172,29 @@ class MUSHWranglerWindow(QMainWindow):
             )
         )
 
-        filt = _SessionWindowEventFilter(self, character.id, sub)
-        sub.installEventFilter(filt)
-        self._session_filters[sub] = filt
-
         sub.destroyed.connect(
-            lambda _=None, window=sub, char_id=character.id: self._on_session_window_destroyed(
-                window, char_id
-            )
+            lambda _=None, char_id=character.id: self._on_session_window_destroyed(char_id)
         )
         self._normalize_subwindow_positions()
         self._refresh_in_use_characters()
         self._refresh_character_menu()
         return sub
 
-    def _on_session_window_destroyed(
-        self,
-        window: QMdiSubWindow,
-        character_id: UUID,
-    ) -> None:
-        self._remove_session_action(window)
-        if self._session_windows_by_character.get(character_id) is window:
-            del self._session_windows_by_character[character_id]
-        filt = self._session_filters.pop(window, None)
-        if filt is not None:
-            filt.deleteLater()
+    def _on_session_window_destroyed(self, character_id: UUID) -> None:
+        window = self._session_windows_by_character.pop(character_id, None)
+        if window is not None:
+            action = self._session_actions.pop(window, None)
+            if action is not None:
+                if not self._shutting_down:
+                    try:
+                        self.session_toolbar.removeAction(action)
+                    except RuntimeError:
+                        pass
+                action.deleteLater()
+
+        if self._shutting_down:
+            return
+
         self._refresh_in_use_characters()
         self._refresh_character_menu()
 
@@ -256,13 +232,6 @@ class MUSHWranglerWindow(QMainWindow):
         for window, action in list(self._session_actions.items()):
             action.setChecked(window is active)
 
-    def _remove_session_action(self, window: QMdiSubWindow) -> None:
-        action = self._session_actions.pop(window, None)
-        if action is None:
-            return
-        self.session_toolbar.removeAction(action)
-        action.deleteLater()
-
     def _close_active_subwindow(self) -> None:
         active = self.mdi_area.activeSubWindow()
         if active is None:
@@ -277,9 +246,10 @@ class MUSHWranglerWindow(QMainWindow):
         character = self.settings.characters.get(character_id)
         if character is None:
             return
-        if window not in self.mdi_area.subWindowList():
+        try:
+            geo = window.geometry()
+        except RuntimeError:
             return
-        geo = window.geometry()
         character.window = WindowState(
             x=geo.x(),
             y=geo.y(),
@@ -287,6 +257,15 @@ class MUSHWranglerWindow(QMainWindow):
             height=geo.height(),
         )
         save_character(character)
+
+    def _persist_all_session_geometries(self) -> None:
+        for character_id, window in list(self._session_windows_by_character.items()):
+            self._store_character_window_state(character_id, window)
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        self._shutting_down = True
+        self._persist_all_session_geometries()
+        super().closeEvent(event)
 
     def _has_saved_window_state(self, window: QMdiSubWindow) -> bool:
         for character_id, session_window in self._session_windows_by_character.items():
@@ -306,10 +285,16 @@ class MUSHWranglerWindow(QMainWindow):
             if sub in windows:
                 in_use.add(character_id)
 
-        self._settings_widget.set_in_use_characters(in_use)
+        try:
+            self._settings_widget.set_in_use_characters(in_use)
+        except RuntimeError:
+            self._settings_widget = None
 
     def _refresh_character_menu(self) -> None:
-        self._character_menu.clear()
+        try:
+            self._character_menu.clear()
+        except RuntimeError:
+            return
         self._character_menu_actions.clear()
 
         characters = list(self.settings.characters.values())
