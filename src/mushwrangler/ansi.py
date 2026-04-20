@@ -33,12 +33,20 @@ class ANSIParser:
             if self._state == _ParserState.ESCAPED:
                 if byte == ord("["):
                     self._state = _ParserState.ANSI_ESC
+                    self._ansi_buffer.clear()
+                    continue
+
+                self._state = _ParserState.NORMAL
+                self._segment_buffer.append(byte)
                 continue
 
             if self._state == _ParserState.ANSI_ESC:
                 if byte == ord("m"):
                     self._state = _ParserState.NORMAL
                     self._apply()
+                elif 0x40 <= byte <= 0x7E:
+                    self._state = _ParserState.NORMAL
+                    self._ansi_buffer.clear()
                 else:
                     self._ansi_buffer.append(byte)
 

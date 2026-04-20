@@ -73,6 +73,7 @@ class GlobalDisplayEditor(QWidget):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._global: GlobalSettings | None = None
+        self._loading = False
 
         layout = QFormLayout(self)
 
@@ -107,8 +108,10 @@ class GlobalDisplayEditor(QWidget):
 
     def set_global(self, global_settings: GlobalSettings | None) -> None:
         self._global = global_settings
+        self._loading = True
         if global_settings is None:
             self.setEnabled(False)
+            self._loading = False
             return
 
         self.setEnabled(True)
@@ -124,8 +127,11 @@ class GlobalDisplayEditor(QWidget):
             self.charset.addItem(d.charset)
             idx = self.charset.findText(d.charset)
         self.charset.setCurrentIndex(max(idx, 0))
+        self._loading = False
 
     def _apply(self) -> None:
+        if self._loading:
+            return
         if self._global is None:
             return
         self._global.display.input_text = FontSpec(
@@ -153,6 +159,7 @@ class DisplayOverrideEditor(QWidget):
         self._base_input = FontSpec()
         self._base_output = FontSpec()
         self._base_charset = "utf-8"
+        self._loading = False
 
         layout = QFormLayout(self)
 
@@ -215,9 +222,11 @@ class DisplayOverrideEditor(QWidget):
         self._base_input = base_input
         self._base_output = base_output
         self._base_charset = base_charset
+        self._loading = True
 
         if overrides is None:
             self.setEnabled(False)
+            self._loading = False
             return
 
         self.setEnabled(True)
@@ -241,8 +250,11 @@ class DisplayOverrideEditor(QWidget):
             self.charset.addItem(charset)
             idx = self.charset.findText(charset)
         self.charset.setCurrentIndex(max(idx, 0))
+        self._loading = False
 
     def _apply(self) -> None:
+        if self._loading:
+            return
         if self._overrides is None or self._save_callback is None:
             return
 
@@ -420,6 +432,7 @@ class WorldConnectEditor(QWidget):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._world: World | None = None
+        self._loading = False
         layout = QFormLayout(self)
 
         self.name_edit = QLineEdit(self)
@@ -465,6 +478,7 @@ class WorldConnectEditor(QWidget):
 
     def set_world(self, world: World | None) -> None:
         self._world = world
+        self._loading = True
         if world is None:
             self.setEnabled(False)
             self.name_edit.clear()
@@ -478,6 +492,7 @@ class WorldConnectEditor(QWidget):
             self.proxy_port_spin.setValue(0)
             self.proxy_user_edit.clear()
             self.proxy_password_edit.clear()
+            self._loading = False
             return
         self.setEnabled(True)
         self.name_edit.setText(world.name)
@@ -496,8 +511,11 @@ class WorldConnectEditor(QWidget):
         self.proxy_port_spin.setValue(world.proxy.port)
         self.proxy_user_edit.setText(world.proxy.user)
         self.proxy_password_edit.setText(world.proxy.password)
+        self._loading = False
 
     def _apply(self) -> None:
+        if self._loading:
+            return
         if self._world is None:
             return
         self._world.name = self.name_edit.text().strip()
@@ -527,6 +545,7 @@ class CharacterConnectEditor(QWidget):
         super().__init__(parent)
         self._settings = settings
         self._character: Character | None = None
+        self._loading = False
 
         layout = QFormLayout(self)
         self.name_edit = QLineEdit(self)
@@ -553,6 +572,7 @@ class CharacterConnectEditor(QWidget):
         self.launch_on_startup_check.stateChanged.connect(lambda _s: self._apply())
 
     def refresh_worlds(self) -> None:
+        self._loading = True
         selected = self.world_combo.currentData()
         self.world_combo.blockSignals(True)
         self.world_combo.clear()
@@ -563,9 +583,11 @@ class CharacterConnectEditor(QWidget):
             if idx >= 0:
                 self.world_combo.setCurrentIndex(idx)
         self.world_combo.blockSignals(False)
+        self._loading = False
 
     def set_character(self, character: Character | None) -> None:
         self._character = character
+        self._loading = True
         self.refresh_worlds()
         if character is None:
             self.setEnabled(False)
@@ -574,6 +596,7 @@ class CharacterConnectEditor(QWidget):
             self.login_script_edit.clear()
             self.split_input_check.setChecked(False)
             self.launch_on_startup_check.setChecked(False)
+            self._loading = False
             return
 
         self.setEnabled(True)
@@ -589,8 +612,11 @@ class CharacterConnectEditor(QWidget):
         idx = self.world_combo.findData(character.world_id)
         if idx >= 0:
             self.world_combo.setCurrentIndex(idx)
+        self._loading = False
 
     def _apply(self) -> None:
+        if self._loading:
+            return
         if self._character is None:
             return
         self._character.name = self.name_edit.text().strip()
@@ -603,6 +629,8 @@ class CharacterConnectEditor(QWidget):
         self.changed.emit()
 
     def _on_world_changed(self, _index: int) -> None:
+        if self._loading:
+            return
         if self._character is None:
             return
         target_world_id = self.world_combo.currentData()

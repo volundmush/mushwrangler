@@ -37,7 +37,7 @@ class FontSpec(BaseModel):
 
     family: str = ""
     style: str = "Normal"
-    size: int = 11
+    size: int = 12
 
 
 class DisplaySettings(BaseModel):

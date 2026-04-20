@@ -6,6 +6,8 @@ from PySide6.QtGui import (
     QFont,
     QFontDatabase,
     QKeyEvent,
+    QKeySequence,
+    QShortcut,
     QTextCharFormat,
     QTextCursor,
 )
@@ -81,6 +83,11 @@ class CommandInput(QTextEdit):
         super().keyPressEvent(event)
 
 
+class TailOutputView(QTextEdit):
+    def wheelEvent(self, event) -> None:
+        event.ignore()
+
+
 class MUClientInstance(QSplitter):
     def __init__(self, character: Character, world: World, parent=None) -> None:
         super().__init__(parent)
@@ -88,6 +95,7 @@ class MUClientInstance(QSplitter):
         self.world = world
         self._ansi = ANSIParser()
         self._connection = ClientConnection(character, world, self)
+        self._pending_user_lines: list[str] = []
 
         self.setOrientation(Qt.Orientation.Vertical)
 
@@ -100,14 +108,16 @@ class MUClientInstance(QSplitter):
         self.output.setReadOnly(True)
         self.output.setUndoRedoEnabled(False)
         self.output.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
+        self.output.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.output.verticalScrollBar().valueChanged.connect(self._sync_tail_visibility)
 
-        self.tail_output = QTextEdit(self.output_split)
+        self.tail_output = TailOutputView(self.output_split)
         self.tail_output.setReadOnly(True)
         self.tail_output.setUndoRedoEnabled(False)
         self.tail_output.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
         self.tail_output.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.tail_output.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.tail_output.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.tail_output.setMaximumHeight(120)
 
         self.output_split.setChildrenCollapsible(False)
@@ -142,6 +152,14 @@ class MUClientInstance(QSplitter):
         self._connection.text_received.connect(self._on_text_received)
         self._connection.debug_received.connect(self._on_debug_received)
 
+        self._page_up_shortcut = QShortcut(QKeySequence(Qt.Key.Key_PageUp), self)
+        self._page_up_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self._page_up_shortcut.activated.connect(lambda: self._scroll_output_by_wheel_steps(-3))
+
+        self._page_down_shortcut = QShortcut(QKeySequence(Qt.Key.Key_PageDown), self)
+        self._page_down_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self._page_down_shortcut.activated.connect(lambda: self._scroll_output_by_wheel_steps(3))
+
         self._append_status(f"Connected profile: {world.name} / {character.name}")
         host = character.host_override or world.host
         self._append_status(
@@ -150,6 +168,17 @@ class MUClientInstance(QSplitter):
         self._set_split_input_enabled(self.character.split_input)
         self.apply_display_preferences()
         self._connection.start()
+
+    def is_session_connected(self) -> bool:
+        return self._connection.is_connected()
+
+    def connect_session(self) -> None:
+        if self._connection.is_connected():
+            return
+        self._connection.start()
+
+    def disconnect_session(self) -> None:
+        self._connection.close()
 
     def _build_input_widget(self, parent) -> CommandInput:
         widget = CommandInput(parent)
@@ -232,10 +261,16 @@ class MUClientInstance(QSplitter):
         in_font = self.input.font()
         in_font.setFamily(in_spec.family or in_font.family())
         in_font.setPointSize(in_spec.size)
+        in_font.setStyleStrategy(
+            in_font.styleStrategy() | QFont.StyleStrategy.PreferNoShaping
+        )
 
         out_font = self.output.font()
         out_font.setFamily(out_spec.family or out_font.family())
         out_font.setPointSize(out_spec.size)
+        out_font.setStyleStrategy(
+            out_font.styleStrategy() | QFont.StyleStrategy.PreferNoShaping
+        )
 
         self.input.setFont(in_font)
         self.input2.setFont(in_font)
@@ -256,6 +291,11 @@ class MUClientInstance(QSplitter):
         script = self.character.login_script or self.character.login
         if script:
             self._send_login_script(script)
+        if self._pending_user_lines:
+            pending = self._pending_user_lines
+            self._pending_user_lines = []
+            for line in pending:
+                self._connection.send_line(line)
 
     def _on_disconnected(self, reason: str) -> None:
         self._append_status(f"Session disconnected: {reason}")
@@ -291,7 +331,8 @@ class MUClientInstance(QSplitter):
 
         self.output.setTextCursor(out_cursor)
         self.tail_output.setTextCursor(tail_cursor)
-        self.tail_output.ensureCursorVisible()
+        tail_scroll = self.tail_output.verticalScrollBar()
+        tail_scroll.setValue(tail_scroll.maximum())
 
         if at_bottom:
             out_scroll.setValue(out_scroll.maximum())
@@ -328,14 +369,23 @@ class MUClientInstance(QSplitter):
         self.output_split.setHandleWidth(4)
         self.output_split.setSizes([880, 120])
 
+    def _scroll_output_by_wheel_steps(self, steps: int) -> None:
+        scroll = self.output.verticalScrollBar()
+        if steps == 0:
+            return
+        target = scroll.value() + (scroll.singleStep() * steps)
+        scroll.setValue(target)
+
     def _send_user_line(self, text: str) -> None:
         if not text:
             return
-        if not self._connection.is_connected():
-            self._append_status("Not connected; command not sent")
-            return
         self.input.add_history(text)
         self.input2.add_history(text)
+        if not self._connection.is_connected():
+            self._pending_user_lines.append(text)
+            self._append_status("Not connected; attempting to connect")
+            self.connect_session()
+            return
         self._connection.send_line(text)
 
     def _send_login_script(self, script: str) -> None:

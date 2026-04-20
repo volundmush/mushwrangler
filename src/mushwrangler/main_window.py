@@ -4,7 +4,15 @@ from uuid import UUID
 
 from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtGui import QAction, QCloseEvent
-from PySide6.QtWidgets import QMainWindow, QMdiArea, QMdiSubWindow, QStatusBar, QToolBar
+from PySide6.QtWidgets import (
+    QMainWindow,
+    QMdiArea,
+    QMdiSubWindow,
+    QMenu,
+    QStatusBar,
+    QToolBar,
+    QToolButton,
+)
 
 from mushwrangler.models import Character, WindowState
 from mushwrangler.settings import SettingsData, save_character, save_global_settings
@@ -130,6 +138,24 @@ class MUSHWranglerWindow(QMainWindow):
         main_toolbar.addAction(tile_action)
         main_toolbar.addAction(cascade_action)
         main_toolbar.addAction(normalize_action)
+        main_toolbar.addSeparator()
+
+        connection_menu = QMenu("Connection", self)
+        connect_action = connection_menu.addAction("Connect")
+        connect_action.triggered.connect(self._connect_active_session)
+        disconnect_action = connection_menu.addAction("Disconnect")
+        disconnect_action.triggered.connect(self._disconnect_active_session)
+        connection_menu.addSeparator()
+        connect_all_action = connection_menu.addAction("Connect to All Open Worlds")
+        connect_all_action.triggered.connect(self._connect_all_open_sessions)
+        disconnect_all_action = connection_menu.addAction("Disconnect All")
+        disconnect_all_action.triggered.connect(self._disconnect_all_open_sessions)
+
+        connection_button = QToolButton(main_toolbar)
+        connection_button.setText("Connection")
+        connection_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        connection_button.setMenu(connection_menu)
+        main_toolbar.addWidget(connection_button)
 
         self.session_toolbar = QToolBar("Sessions", self)
         self.session_toolbar.setObjectName("sessions_toolbar")
@@ -390,6 +416,47 @@ class MUSHWranglerWindow(QMainWindow):
         if character is None:
             return
         self._open_character_session(character)
+
+    def _active_client(self) -> MUClientInstance | None:
+        active = self.mdi_area.activeSubWindow()
+        if active is None:
+            return None
+        widget = active.widget()
+        if isinstance(widget, MUClientInstance):
+            return widget
+        return None
+
+    def _iter_open_clients(self) -> list[MUClientInstance]:
+        clients: list[MUClientInstance] = []
+        for sub in self.mdi_area.subWindowList():
+            widget = sub.widget()
+            if isinstance(widget, MUClientInstance):
+                clients.append(widget)
+        return clients
+
+    def _connect_active_session(self) -> None:
+        client = self._active_client()
+        if client is None:
+            return
+        client.connect_session()
+
+    def _disconnect_active_session(self) -> None:
+        client = self._active_client()
+        if client is None:
+            return
+        client.disconnect_session()
+
+    def _connect_all_open_sessions(self) -> None:
+        for client in self._iter_open_clients():
+            if client.is_session_connected():
+                continue
+            client.connect_session()
+
+    def _disconnect_all_open_sessions(self) -> None:
+        for client in self._iter_open_clients():
+            if not client.is_session_connected():
+                continue
+            client.disconnect_session()
 
     def show_settings_window(self) -> None:
         if self._settings_subwindow is not None and self._settings_subwindow in self.mdi_area.subWindowList():
